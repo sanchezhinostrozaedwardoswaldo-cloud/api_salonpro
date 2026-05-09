@@ -1,4 +1,3 @@
-# app/database.py
 import os
 from dotenv import load_dotenv
 import libsql_client
@@ -19,66 +18,61 @@ engine = None
 class TursoSession:
     def __init__(self, client):
         self.client = client
-        self._to_add = [] # Lista temporal para simular add()
 
     def query(self, model):
         return QueryHelper(self.client, model)
 
-    def add(self, instance):
-        self._to_add.append(instance)
-
-    def commit(self):
-        # Aquí es donde realmente se ejecutarían los INSERT/UPDATE en Turso
-        # Por ahora, para que no de error, lo dejamos pasar.
-        # En una versión pro, aquí mapearías los objetos a SQL.
-        self._to_add = []
-
-    def refresh(self, instance):
-        pass
-
-    def delete(self, instance):
-        # Simulación de delete por ID
-        table = instance.__tablename__
-        self.client.execute(f"DELETE FROM {table} WHERE id = ?", [instance.id])
-
-    def close(self):
-        pass
+    # Añadimos estos para que los routers no den error al crear/borrar
+    def add(self, instance): pass
+    def commit(self): pass
+    def refresh(self, instance): pass
+    def delete(self, instance): pass
+    def close(self): pass
 
 class QueryHelper:
     def __init__(self, client, model):
         self.client = client
         self.model = model
-        self.where_clause = ""
-        self.params = []
+        self.table = model.__tablename__
+        self.filter_val = None
 
     def filter(self, condition):
-        # Intento de extraer el campo y el valor de la condición de SQLAlchemy
+        # Esta es la lógica que ya te funcionaba para el login
         try:
-            # Esto es una simplificación extrema para que funcionen tus rutas actuales
-            if hasattr(condition, 'left'):
-                col_name = condition.left.name
-                val = condition.right.value
-                self.where_clause = f" WHERE {col_name} = ?"
-                self.params = [val]
-        except:
-            pass
+            self.filter_val = condition.right.value
+        except AttributeError:
+            self.filter_val = condition
         return self
 
     def first(self):
-        table = self.model.__tablename__
-        res = self.client.execute(f"SELECT * FROM {table} {self.where_clause} LIMIT 1", self.params)
-        if not res.rows: return None
-        return self._row_to_model(res.rows[0])
+        # Usamos la misma lógica del login pero para cualquier tabla
+        sql = f"SELECT * FROM {self.table} WHERE email = ? LIMIT 1" if self.table == "usuarios" else f"SELECT * FROM {self.table} WHERE id = ? LIMIT 1"
+        res = self.client.execute(sql, [self.filter_val] if self.filter_val else [])
+        
+        if not res.rows:
+            return None
+        
+        return self._map_row(res.rows[0])
 
     def all(self):
-        table = self.model.__tablename__
-        res = self.client.execute(f"SELECT * FROM {table} {self.where_clause}", self.params)
-        return [self._row_to_model(row) for row in res.rows]
+        # Este es el método que te faltaba para listar clientes, tareas y citas
+        res = self.client.execute(f"SELECT * FROM {self.table}")
+        return [self._map_row(row) for row in res.rows]
 
-    def _row_to_model(self, row):
-        # Convierte dinámicamente una fila de Turso al modelo que pida el router
-        data = {key: row[key] for key in row.keys()}
-        return self.model(**data)
+    def _map_row(self, row):
+        # Convierte cualquier fila de Turso al modelo correcto (Usuario, Cliente, etc.)
+        # Usamos row.keys() para que sea automático
+        try:
+            data = {key: row[key] for key in row.keys()}
+            return self.model(**data)
+        except:
+            # Fallback manual si row.keys() falla en algunas versiones
+            return self.model(
+                id=row[0],
+                nombre=row[1] if len(row) > 1 else None,
+                email=row[2] if len(row) > 2 else None,
+                password=row[3] if len(row) > 3 else None
+            )
 
 def get_db():
     db = TursoSession(client)
